@@ -1,1 +1,0 @@
-self.activation_quant(x)

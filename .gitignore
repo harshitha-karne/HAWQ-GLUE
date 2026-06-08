@@ -128,3 +128,20 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+
+# HAWQ virtual environments
+hawq_env/
+hawq_envN/
+
+# Training artifacts
+checkpoints/
+*.pt
+*.pth
+*.bin
+
+# Temporary files
+tempCodeRunnerFile.py
+
+# Python cache
+__pycache__/
