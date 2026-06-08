@@ -121,12 +121,12 @@ parser.add_argument('--act-percentile',
                     type=float,
                     default=0,
                     help='the percentage used for activation percentile'
-                         '(0 means no percentile, 99.9 means cut off 0.1%)')
+                         '(0 means no percentile, 99.9 means cut off 0.1%%)')
 parser.add_argument('--weight-percentile',
                     type=float,
                     default=0,
                     help='the percentage used for weight percentile'
-                         '(0 means no percentile, 99.9 means cut off 0.1%)')
+                         '(0 means no percentile, 99.9 means cut off 0.1%%)')
 parser.add_argument('--channel-wise',
                     action='store_false',
                     help='whether to use channel-wise quantizaiton or not')
