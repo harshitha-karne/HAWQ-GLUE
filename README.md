@@ -35,34 +35,15 @@ This project provides an end-to-end framework for:
 * FP32 vs HAWQ Comparison Tables
 
 ---
-
 ## Supported Models
 
-| Model      |
-| ---------- |
-| BERT-base  |
-| DistilBERT |
-| ALBERT     |
-| MobileBERT |
-| TinyBERT   |
-| GPT2       |
+BERT-base • DistilBERT • ALBERT • MobileBERT • TinyBERT • GPT2
 
 ---
 
 ## Supported GLUE Datasets
 
-| Dataset |
-| ------- |
-| SST2    |
-| QNLI    |
-| MNLI    |
-| QQP     |
-| RTE     |
-| MRPC    |
-| WNLI    |
-| STS-B   |
-| CoLA    |
-
+SST2 • QNLI • MNLI • QQP • RTE • MRPC • WNLI • STS-B • CoLA
 ---
 
 ## Pipeline
