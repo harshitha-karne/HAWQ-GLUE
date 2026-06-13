@@ -8,4 +8,8 @@ transformers>=4.40
 evaluate>=0.4
 tqdm>=4.66
 accelerate>=0.27
+<<<<<<< HEAD
 sentencepiece>=0.1.99
+=======
+sentencepiece>=0.1.99
+>>>>>>> 9144148 (Save local changes)
