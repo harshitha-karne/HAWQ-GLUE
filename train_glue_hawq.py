@@ -5,41 +5,33 @@ import time
 import warnings
 import subprocess
 import pandas as pd
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
-
 from torch.utils.data import DataLoader
 from torch.cuda.amp import autocast, GradScaler
-from sklearn.metrics import accuracy_score
-
+from sklearn.metrics import accuracy_score,precision_score,recall_score,f1_score
 from datasets import load_dataset
-
 from transformers import (
     AutoTokenizer,
     AutoModelForSequenceClassification,
     DataCollatorWithPadding,
     get_linear_schedule_with_warmup
 )
-
 import evaluate
 from tqdm import tqdm
 
-
 warnings.filterwarnings("ignore")
-
 
 # =========================================================
 # ARGUMENTS
 # =========================================================
-
-parser = argparse.ArgumentParser(description='Improved HAWQ GLUE Training')
+parser = argparse.ArgumentParser(description='GLUE Fine Tuning')
 
 parser.add_argument('--task',
                     type=str,
                     default='sst2',
-                    choices=['sst2', 'qnli', 'mnli', 'qqp', 'rte','mrpc','wnli','stsb','cola'])
+                    choices=['sst2','qnli','mnli','qqp','rte','mrpc','wnli','stsb','cola'])
 
 parser.add_argument('--model',
                     type=str,
@@ -47,7 +39,7 @@ parser.add_argument('--model',
 
 parser.add_argument('--epochs',
                     type=int,
-                    default=1)
+                    default=3)
 
 parser.add_argument('--batch-size',
                     type=int,
@@ -61,14 +53,6 @@ parser.add_argument('--max-length',
                     type=int,
                     default=256)
 
-parser.add_argument('--weight-bit',
-                    type=int,
-                    default=8)
-
-parser.add_argument('--activation-bit',
-                    type=int,
-                    default=8)
-
 parser.add_argument('--seed',
                     type=int,
                     default=42)
@@ -79,35 +63,28 @@ parser.add_argument('--save-path',
 
 parser.add_argument('--csv-path',
                     type=str,
-                    default='./results.csv')
+                    default='./baseline_results.csv')
 
 args = parser.parse_args()
-
 
 # =========================================================
 # RANDOM SEED
 # =========================================================
-
 random.seed(args.seed)
 torch.manual_seed(args.seed)
 
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(args.seed)
 
-
 # =========================================================
 # DEVICE
 # =========================================================
-
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-print(f"\nUsing device: {device}")
-
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("\nUsing device:",device)
 
 # =========================================================
 # TASK CONFIG
 # =========================================================
-
 task_to_keys = {
     'sst2': ('sentence', None),
     'qnli': ('question', 'sentence'),
@@ -121,35 +98,29 @@ task_to_keys = {
 }
 
 num_labels_dict = {
-    'sst2': 2,
-    'qnli': 2,
-    'qqp': 2,
-    'mnli': 3,
-    'rte': 2,
-    'mrpc': 2,
-    'wnli': 2,
-    'cola': 2,
-    'stsb': 1
+    'sst2':2,
+    'qnli':2,
+    'qqp':2,
+    'mnli':3,
+    'rte':2,
+    'mrpc':2,
+    'wnli':2,
+    'cola':2,
+    'stsb':1
 }
-
 
 # =========================================================
 # LOAD DATASET
 # =========================================================
+print("Loading Dataset")
 
-print(f"Loading GLUE dataset: {args.task}")
+dataset = load_dataset("glue",args.task)
 
-dataset = load_dataset("glue", args.task)
-
-sentence1_key, sentence2_key = task_to_keys[args.task]
-
+sentence1_key,sentence2_key = task_to_keys[args.task]
 
 # =========================================================
 # TOKENIZER
 # =========================================================
-
-print("Loading tokenizer...")
-
 tokenizer = AutoTokenizer.from_pretrained(args.model)
 
 if tokenizer.pad_token is None:
@@ -158,7 +129,6 @@ if tokenizer.pad_token is None:
 def preprocess_function(examples):
 
     if sentence2_key is None:
-
         return tokenizer(
             examples[sentence1_key],
             truncation=True,
@@ -172,52 +142,37 @@ def preprocess_function(examples):
         max_length=args.max_length
     )
 
-
-print("Tokenizing dataset...")
-
 tokenized_dataset = dataset.map(
     preprocess_function,
     batched=True
 )
 
-
 # =========================================================
-# DATASET FORMAT
+# DATASETS
 # =========================================================
-
 train_dataset = tokenized_dataset['train']
 
-if args.task == 'mnli':
+if args.task == "mnli":
     eval_dataset = tokenized_dataset['validation_matched']
 else:
     eval_dataset = tokenized_dataset['validation']
 
-
-train_dataset = train_dataset.rename_column(
-    "label",
-    "labels"
-)
-
-eval_dataset = eval_dataset.rename_column(
-    "label",
-    "labels"
-)
+train_dataset = train_dataset.rename_column("label","labels")
+eval_dataset = eval_dataset.rename_column("label","labels")
 
 train_dataset.set_format(
     type='torch',
-    columns=['input_ids', 'attention_mask', 'labels']
+    columns=['input_ids','attention_mask','labels']
 )
 
 eval_dataset.set_format(
     type='torch',
-    columns=['input_ids', 'attention_mask', 'labels']
+    columns=['input_ids','attention_mask','labels']
 )
-
 
 # =========================================================
 # DATALOADER
 # =========================================================
-
 collator = DataCollatorWithPadding(tokenizer)
 
 train_loader = DataLoader(
@@ -234,207 +189,51 @@ eval_loader = DataLoader(
     collate_fn=collator
 )
 
-
 # =========================================================
 # MODEL
 # =========================================================
-
-print(f"Loading model: {args.model}")
-
 if args.task == "stsb":
-
     model = AutoModelForSequenceClassification.from_pretrained(
         args.model,
         num_labels=1,
         problem_type="regression"
     )
-
 else:
-
     model = AutoModelForSequenceClassification.from_pretrained(
         args.model,
         num_labels=num_labels_dict[args.task]
     )
 
-if args.model == "gpt2":
-    model.config.pad_token_id = tokenizer.eos_token_id
-
-
-# =========================================================
-# ACTIVATION QUANTIZATION
-# =========================================================
-
-class QuantAct(nn.Module):
-
-    def __init__(self, activation_bit=8):
-
-        super().__init__()
-
-        self.activation_bit = activation_bit
-
-    def forward(self, x):
-
-        qmin = -(2 ** (self.activation_bit - 1))
-        qmax = (2 ** (self.activation_bit - 1)) - 1
-
-        scale = x.abs().max() / qmax
-
-        if scale == 0:
-            return x
-
-        x_int = torch.clamp(
-            (x / scale).round(),
-            qmin,
-            qmax
-        )
-
-        return x_int * scale
-
-
-# =========================================================
-# QUANT LINEAR
-# =========================================================
-
-class QuantLinear(nn.Module):
-
-    def __init__(self,
-                 layer,
-                 weight_bit=8,
-                 activation_bit=8):
-
-        super().__init__()
-
-        self.layer = layer
-
-        self.weight_bit = weight_bit
-
-        self.activation_quant = QuantAct(
-            activation_bit
-        )
-
-    def quantize_weight(self, x):
-
-        qmin = -(2 ** (self.weight_bit - 1))
-        qmax = (2 ** (self.weight_bit - 1)) - 1
-
-        scale = x.abs().max() / qmax
-
-        if scale == 0:
-            return x
-
-        x_int = torch.clamp(
-            (x / scale).round(),
-            qmin,
-            qmax
-        )
-
-        return x_int * scale
-
-    def forward(self, x):
-
-#       x = self.activation_quant(x)
-
-        quant_weight = self.quantize_weight(
-            self.layer.weight
-        )
-
-        return nn.functional.linear(
-            x,
-            quant_weight,
-            self.layer.bias
-        )
-
-
-# =========================================================
-# HAWQ STYLE MIXED PRECISION
-# =========================================================
-
-def quantize_model(module):
-
-    for name, child in module.named_children():
-
-        if isinstance(child, nn.Linear):
-
-            if "classifier" in name:
-                continue
-
-            bit = args.weight_bit
-
-            if "attention" in name:
-                bit = 8
-
-            elif "intermediate" in name:
-                bit = 4
-
-            setattr(
-                module,
-                name,
-                QuantLinear(
-                    child,
-                    weight_bit=bit,
-                    activation_bit=args.activation_bit
-                )
-            )
-
-        else:
-            quantize_model(child)
-
-
-print("Applying quantization...")
-
-quantize_model(model)
-
-
-# =========================================================
-# MODEL TO DEVICE
-# =========================================================
+if model.config.pad_token_id is None:
+    model.config.pad_token_id = tokenizer.pad_token_id
 
 model = model.to(device)
 
-
 # =========================================================
-# MODEL MEMORY SIZE
+# MODEL SIZE
 # =========================================================
-
 def get_model_size(model):
 
     param_size = 0
 
     for param in model.parameters():
-
-        param_size += (
-            param.nelement() *
-            param.element_size()
-        )
+        param_size += param.nelement()*param.element_size()
 
     buffer_size = 0
 
     for buffer in model.buffers():
+        buffer_size += buffer.nelement()*buffer.element_size()
 
-        buffer_size += (
-            buffer.nelement() *
-            buffer.element_size()
-        )
-
-    size_mb = (
-        param_size + buffer_size
-    ) / 1024**2
-
-    return size_mb
-
+    return (param_size+buffer_size)/(1024**2)
 
 model_size = get_model_size(model)
 
-print(f"\nModel Size: {model_size:.2f} MB")
-
 # =========================================================
-# GPU POWER USAGE
+# GPU POWER
 # =========================================================
-
 def get_gpu_power():
 
     try:
-
         result = subprocess.check_output(
             [
                 "nvidia-smi",
@@ -448,43 +247,29 @@ def get_gpu_power():
         return float(power)
 
     except:
-
         return -1
-# =========================================================
-# ENERGY CONSUMPTION
-# =========================================================
-
-energy_consumption = get_gpu_power()
-
 
 # =========================================================
 # OPTIMIZER
 # =========================================================
-
 optimizer = optim.AdamW(
     model.parameters(),
     lr=args.lr
 )
 
-total_steps = len(train_loader) * args.epochs
+total_steps = len(train_loader)*args.epochs
 
 scheduler = get_linear_schedule_with_warmup(
     optimizer,
-    num_warmup_steps=int(0.1 * total_steps),
+    num_warmup_steps=int(0.1*total_steps),
     num_training_steps=total_steps
 )
 
-# =========================================================
-# AMP
-# =========================================================
-
 scaler = GradScaler()
-
 
 # =========================================================
 # TRAIN
 # =========================================================
-
 def train(epoch):
 
     model.train()
@@ -496,16 +281,14 @@ def train(epoch):
     for batch in progress_bar:
 
         batch = {
-            k: v.to(device)
-            for k, v in batch.items()
+            k:v.to(device)
+            for k,v in batch.items()
         }
 
         optimizer.zero_grad()
 
         with autocast():
-
             outputs = model(**batch)
-
             loss = outputs.loss
 
         scaler.scale(loss).backward()
@@ -516,9 +299,7 @@ def train(epoch):
         )
 
         scaler.step(optimizer)
-
         scaler.update()
-
         scheduler.step()
 
         total_loss += loss.item()
@@ -527,17 +308,11 @@ def train(epoch):
             f"Epoch {epoch} Loss {loss.item():.4f}"
         )
 
-    avg_loss = total_loss / len(train_loader)
-
-    print(f"\nTrain Loss: {avg_loss:.4f}")
-
-    return avg_loss
-
+    return total_loss/len(train_loader)
 
 # =========================================================
 # VALIDATION
 # =========================================================
-
 def validate():
 
     model.eval()
@@ -545,11 +320,9 @@ def validate():
     metric = evaluate.load("glue", args.task)
 
     total_latency = 0
-
     total_samples = 0
 
     all_predictions = []
-
     all_labels = []
 
     with torch.no_grad():
@@ -561,7 +334,7 @@ def validate():
                 for k, v in batch.items()
             }
 
-            batch_size = batch['input_ids'].size(0)
+            batch_size = batch["input_ids"].size(0)
 
             total_samples += batch_size
 
@@ -579,7 +352,7 @@ def validate():
 
                 metric.add_batch(
                     predictions=predictions,
-                    references=batch['labels']
+                    references=batch["labels"]
                 )
 
             else:
@@ -594,17 +367,16 @@ def validate():
                 )
 
                 all_labels.extend(
-                    batch['labels'].cpu().numpy()
+                    batch["labels"].cpu().numpy()
                 )
 
                 metric.add_batch(
                     predictions=predictions,
-                    references=batch['labels']
+                    references=batch["labels"]
                 )
 
     result = metric.compute()
 
-    # Add accuracy for all classification datasets
     if args.task != "stsb":
 
         accuracy = accuracy_score(
@@ -612,131 +384,402 @@ def validate():
             all_predictions
         )
 
-        result["accuracy"] = accuracy
+        precision = precision_score(
+            all_labels,
+            all_predictions,
+            average="weighted",
+            zero_division=0
+        )
+
+        recall = recall_score(
+            all_labels,
+            all_predictions,
+            average="weighted",
+            zero_division=0
+        )
+
+        f1 = f1_score(
+            all_labels,
+            all_predictions,
+            average="weighted",
+            zero_division=0
+        )
+
+    else:
+
+        accuracy = result["pearson"]
+        precision = result["pearson"]
+        recall = result["pearson"]
+        f1 = result["pearson"]
 
     avg_latency = total_latency / len(eval_loader)
 
     throughput = total_samples / total_latency
 
-    print(f"\nValidation Result: {result}")
+    energy_consumption = get_gpu_power()
 
-    print(f"Average Latency: {avg_latency:.6f} sec")
+    return result, accuracy, precision, recall, f1, avg_latency, throughput, energy_consumption
 
-    print(f"Throughput: {throughput:.2f} samples/sec")
-
-    return result, avg_latency, throughput
 
 # =========================================================
 # SAVE CHECKPOINT
 # =========================================================
-
-def save_checkpoint(epoch, score):
+def save_checkpoint(epoch,score):
 
     if not os.path.exists(args.save_path):
         os.makedirs(args.save_path)
 
     save_file = os.path.join(
         args.save_path,
-        f"{args.task}_best.pt"
+        f"{args.model.replace('/','_')}_{args.task}_fp32_best.pt"
     )
 
-    torch.save({
-        'epoch': epoch,
-        'model_state_dict': model.state_dict(),
-        'score': score
-    }, save_file)
+    torch.save(
+        {
+            "epoch":epoch,
+            "model_state_dict":model.state_dict(),
+            "score":score
+        },
+        save_file
+    )
 
-    print(f"\nSaved best model to {save_file}")
+    print("\nSaved Best Model :",save_file)
 
 
 # =========================================================
 # CSV LOGGING
 # =========================================================
-
 results_list = []
 
 
 # =========================================================
 # TRAIN LOOP
 # =========================================================
+best_score = -float("inf")
 
-best_score = -float('inf')
+print("\nStarting Training\n")
 
-print("\nStarting Training...\n")
+for epoch in range(1,args.epochs+1):
 
-for epoch in range(1, args.epochs + 1):
-
-    print(f"\n================ EPOCH {epoch} ================\n")
+    print(f"\n========== EPOCH {epoch} ==========\n")
 
     train_loss = train(epoch)
 
-    result, latency, throughput = validate()
+    result,accuracy,precision,recall,f1,latency,throughput,energy_consumption = validate()
 
-    if "accuracy" in result:
-       score = result["accuracy"]
+    score = accuracy
 
-    elif "pearson" in result:
-        score = result["pearson"]
-
-    elif "matthews_correlation" in result:
-        score = result["matthews_correlation"]
-
-    else:
-        score = list(result.values())[0]
-    print(f"\nValidation Score: {score:.4f}")
+    print("\nAccuracy :",accuracy)
+    print("F1 Score :",f1)
 
     results_list.append({
-        "task": args.task,
-        "model": args.model,
-        "epoch": epoch,
-        "weight_bit": args.weight_bit,
-        "activation_bit": args.activation_bit,
-        "train_loss": train_loss,
-        "accuracy": score,
-        "model_size_mb": model_size,
-        "latency_sec": latency,
-        "throughput": throughput,
-        "energy_consumption": energy_consumption
+
+        "task":args.task,
+        "model":args.model,
+        "epoch":epoch,
+        "train_loss":train_loss,
+        "accuracy":accuracy,
+        "precision":precision,
+        "recall":recall,
+        "f1_score":f1,
+        "memory_size_mb":model_size,
+        "latency_sec":latency,
+        "energy_consumption_j":energy_consumption,
+        "throughput_samples_sec":throughput,
+        "precision_type":"FP32"
+
     })
 
     if score > best_score:
 
         best_score = score
 
-        save_checkpoint(epoch, score)
+        save_checkpoint(
+            epoch,
+            score
+        )
 
 
 # =========================================================
-# SAVE CSV
+# SAVE BASELINE CSV
 # =========================================================
-
 df = pd.DataFrame(results_list)
 
-df.to_csv(args.csv_path, index=False)
+df.to_csv(
+    f"results/baseline_{args.model.replace('/','_')}_{args.task}.csv",
+    index=False
+)
 
-print(f"\nResults Saved To: {args.csv_path}")
+print("\nBaseline Results Saved")
 
 
 # =========================================================
-# FINAL RESULTS
+# FINAL FP32 RESULTS
 # =========================================================
+print("\n============== FP32 BASELINE ==============\n")
 
-print("\n================ FINAL RESULTS ================\n")
+print("Model Name :", args.model)
+print("Dataset Name :", args.task)
+print("Memory Size (MB) :", round(model_size,2))
+print("Latency (sec) :", round(latency,6))
+print("Accuracy (%) :", round(best_score*100,2))
+print("Bits :", 32)
+print("Energy Consumption (J) :", round(energy_consumption,2))
+print("Throughput (samples/sec) :", round(throughput,2))
+print("Precision :", round(precision,4))
+print("Recall :", round(recall,4))
+print("F1 Score :", round(f1,4))
 
-print(f"Model Name: {args.model}")
+# =========================================================
+# ACTIVATION QUANTIZATION
+# =========================================================
+class QuantAct(nn.Module):
 
-print(f"Dataset: {args.task}")
+    def __init__(self,activation_bit=8):
+        super().__init__()
+        self.activation_bit = activation_bit
 
-print(f"Memory Size: {model_size:.2f} MB")
+    def forward(self,x):
 
-print(f"Latency: {latency:.6f} sec")
+        qmin = -(2**(self.activation_bit-1))
+        qmax = (2**(self.activation_bit-1))-1
 
-print(f"Accuracy: {best_score*100:.2f}%")
+        max_val = x.abs().max()
 
-print(f"Bits: Mixed (8/4)")
+        scale = max_val/qmax
 
-print(f"Energy Consumption: {energy_consumption}")
+        if scale == 0:
+            return x
 
-print(f"Throughput: {throughput:.2f} samples/sec")
+        x_int = torch.clamp(
+            (x/scale).round(),
+            qmin,
+            qmax
+        )
 
-print("\nTraining Finished")
+        return x_int*scale
+
+
+# =========================================================
+# QUANT LINEAR
+# =========================================================
+class QuantLinear(nn.Module):
+
+    def __init__(self,
+                 layer,
+                 weight_bit=8,
+                 activation_bit=8):
+
+        super().__init__()
+
+        self.layer = layer
+        self.weight_bit = weight_bit
+        self.activation_quant = QuantAct(
+            activation_bit
+        )
+
+    def quantize_weight(self,x):
+
+        qmin = -(2**(self.weight_bit-1))
+        qmax = (2**(self.weight_bit-1))-1
+
+        max_val = x.abs().max()
+
+        scale = max_val/qmax
+
+        if scale == 0:
+            return x
+
+        x_int = torch.clamp(
+            (x/scale).round(),
+            qmin,
+            qmax
+        )
+
+        return x_int*scale
+
+    def forward(self,x):
+
+        if self.training:
+            return self.layer(x)
+
+        x = self.activation_quant(x)
+
+        quant_weight = self.quantize_weight(
+            self.layer.weight
+        )
+
+        return nn.functional.linear(
+            x,
+            quant_weight,
+            self.layer.bias
+        )
+
+
+# =========================================================
+# IMPROVED HAWQ MIXED PRECISION
+# =========================================================
+def quantize_model(module,prefix=""):
+
+    for name,child in module.named_children():
+
+        full_name = prefix + "." + name if prefix else name
+
+        if isinstance(child,nn.Linear):
+
+            # classifier remains FP32
+            if "classifier" in full_name:
+                continue
+
+            bit = 8
+
+            # attention layers
+            if "attention" in full_name:
+                bit = 8
+
+            # feedforward intermediate layer
+            elif "intermediate.dense" in full_name:
+                bit = 6
+
+            # output projection
+            elif "output.dense" in full_name:
+                bit = 8
+
+            setattr(
+                module,
+                name,
+                QuantLinear(
+                    child,
+                    weight_bit=bit,
+                    activation_bit=8
+                )
+            )
+
+        else:
+            quantize_model(
+                child,
+                full_name
+            )
+
+
+# =========================================================
+# LOAD FINE-TUNED CHECKPOINT
+# =========================================================
+checkpoint = torch.load(
+    os.path.join(
+        args.save_path,
+        f"{args.model.replace('/','_')}_{args.task}_fp32_best.pt"
+    ),
+    map_location=device
+)
+
+model.load_state_dict(
+    checkpoint["model_state_dict"]
+)
+
+print("\nLoaded Fine-Tuned FP32 Model")
+
+
+# =========================================================
+# APPLY HAWQ
+# =========================================================
+quantize_model(model)
+
+model = model.to(device)
+
+quant_model_size = get_model_size(model)
+
+print("\nImproved HAWQ Quantization Applied")
+
+
+# =========================================================
+# EVALUATE QUANTIZED MODEL
+# =========================================================
+result_q,accuracy_q,precision_q,recall_q,f1_q,latency_q,throughput_q,energy_q = validate()
+
+
+# =========================================================
+# FINAL HAWQ RESULTS
+# =========================================================
+print("\n============== HAWQ RESULTS ==============\n")
+
+print("Model Name :", args.model)
+print("Dataset Name :", args.task)
+print("Memory Size (MB) :", round(quant_model_size,2))
+print("Latency (sec) :", round(latency_q,6))
+print("Accuracy (%) :", round(accuracy_q*100,2))
+print("Bits : Mixed(8/6)")
+print("Energy Consumption (J) :", round(energy_q,2))
+print("Throughput (samples/sec) :", round(throughput_q,2))
+print("Precision :", round(precision_q,4))
+print("Recall :", round(recall_q,4))
+print("F1 Score :", round(f1_q,4))
+
+
+# =========================================================
+# COMPARISON TABLE
+# =========================================================
+comparison = pd.DataFrame({
+
+    "Model Name":[args.model,args.model],
+
+    "Memory Size (MB)":[
+        model_size,
+        quant_model_size
+    ],
+
+    "Latency (sec)":[
+        latency,
+        latency_q
+    ],
+
+    "Accuracy (%)":[
+        best_score*100,
+        accuracy_q*100
+    ],
+
+    "Precision":[
+        precision,
+        precision_q
+    ],
+
+    "Recall":[
+        recall,
+        recall_q
+    ],
+
+    "F1 Score":[
+        f1,
+        f1_q
+    ],
+
+    "Bits":[
+        32,
+        "Mixed(8/6)"
+    ],
+
+    "Energy Consumption (J)":[
+        energy_consumption,
+        energy_q
+    ],
+
+    "Throughput (samples/sec)":[
+        throughput,
+        throughput_q
+    ],
+
+    "Precision Type":[
+        "FP32",
+        "INT8/INT6"
+    ]
+
+},
+index=["FP32","HAWQ"])
+
+comparison.to_csv(
+    f"results/comparison_{args.model.replace('/','_')}_{args.task}.csv"
+)
+
+print("\n============== COMPARISON TABLE ==============\n")
+print(comparison)
+
