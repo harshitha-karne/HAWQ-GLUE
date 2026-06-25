@@ -1,8 +1,3 @@
-<p align="center">
-  <img src="imgs/hawq_glue_pipeline.png" width="900">
-  <br>
-  <br>
-</p>
 
 # HAWQ-GLUE: Hessian-Aware Mixed-Precision Quantization of Transformer Models on GLUE Benchmarks
 
